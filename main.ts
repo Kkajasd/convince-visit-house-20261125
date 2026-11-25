@@ -1,39 +1,47 @@
-// Convince the AI Judge to Visit Your House — entry program.
+// convince-visit-house-20261125 — "Convince the AI Judge to Visit Your House"
 //
-// The entry is a single image of an invitation letter. This program builds
-// it from scratch on every run: it invokes the deterministic renderer
-// (tools/draw_letter.py — Pillow plus the vendored DejaVu Serif fonts, no
-// network, no clock, no randomness beyond a fixed seed) and copies the
-// rendered entry.png to the output directory, so repeated runs write
-// byte-identical output.
-import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+// The entry is the image this repository holds (entry.png, a letter
+// drawn by tools/draw_letter.py). This program copies it to the output
+// directory, checking first that it is a PNG of at most 1 MiB and
+// 1024 by 1024 pixels, so the two graded runs write identical bytes.
+//
+// This program deliberately does NOT invoke the renderer and does NOT
+// write anything into the repository directory: the grading sandbox
+// mounts the repo read-only, so at grade time it only reads the
+// already-committed entry.png and copies it to the output directory.
+//
+// Run it locally with:
+//   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
+import { copyFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
-const here = dirname(fileURLToPath(import.meta.url));
-const renderer = join(here, "tools", "draw_letter.py");
-const source = join(here, "entry.png");
-const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
-const target = join(outDir, "entry.png");
+const OUT_DIR = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
+const SRC = new URL('./entry.png', import.meta.url);
 
-// Render the letter in place (deterministic: fixed layout, fixed fonts).
-execFileSync("python3", [renderer], { cwd: here, stdio: "inherit" });
+const bytes = readFileSync(SRC);
 
-const bytes = readFileSync(source);
-if (!isPng(bytes)) {
-  throw new Error("generated entry.png is not a PNG file");
+// A PNG starts with these eight magic bytes.
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+if (!bytes.subarray(0, 8).equals(PNG_MAGIC)) {
+  throw new Error('entry.png is not a PNG file');
 }
-mkdirSync(outDir, { recursive: true });
-writeFileSync(target, bytes);
-if (statSync(target).size !== bytes.length) {
-  throw new Error("copied entry.png size mismatch");
+if (bytes.length > 1024 * 1024) {
+  throw new Error(`entry.png is ${bytes.length} bytes, over the 1 MiB cap`);
 }
-console.log(`Wrote ${target} (${bytes.length} bytes)`);
+// The IHDR chunk holds the width and height as big-endian uint32s.
+const width = bytes.readUInt32BE(16);
+const height = bytes.readUInt32BE(20);
+if (width > 1024 || height > 1024) {
+  throw new Error(`entry.png is ${width}x${height}, over the 1024 cap`);
+}
 
-// Guard: the generated file must start with the PNG signature, so a
-// truncated or wrong-format image fails loudly instead of shipping.
-function isPng(buf: Buffer): boolean {
-  const sig = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
-  return sig.every((b, i) => buf[i] === b);
+mkdirSync(OUT_DIR, { recursive: true });
+const DEST = join(OUT_DIR, 'entry.png');
+copyFileSync(SRC, DEST);
+
+// Read the copy back and confirm it is the same image, byte for byte.
+const written = readFileSync(DEST);
+if (!written.equals(bytes)) {
+  throw new Error('entry.png did not copy cleanly');
 }
+console.log(`wrote ${DEST}: ${width}x${height} PNG, ${bytes.length} bytes`);
